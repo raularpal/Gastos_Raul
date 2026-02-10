@@ -43,11 +43,30 @@ const App = {
 
             if (Array.isArray(data)) {
                 // Normalizar datos
-                App.state.transactions = data.map(t => ({
-                    ...t,
-                    amount: parseFloat(t.amount),
-                    id: t.id || Date.now()
-                }));
+                App.state.transactions = data.map((t, index) => {
+                    // Normalizar fechas y mapear claves (Español/Inglés)
+                    // Google Sheets devuelve strings ISO como "2026-02-09T23:00:00.000Z"
+                    let dateStr = t.date || t.Fecha;
+                    if (dateStr && (typeof dateStr === 'string' && dateStr.includes('T'))) {
+                        const d = new Date(dateStr);
+                        if (!isNaN(d.getTime())) {
+                            const year = d.getFullYear();
+                            const month = String(d.getMonth() + 1).padStart(2, '0');
+                            const day = String(d.getDate()).padStart(2, '0');
+                            dateStr = `${year}-${month}-${day}`;
+                        }
+                    }
+
+                    return {
+                        id: t.id || `sheet-${Date.now()}-${index}`,
+                        date: dateStr,
+                        type: t.type || t.Tipo,
+                        sector: t.sector || t.Sector,
+                        amount: parseFloat(t.amount || t.Importe),
+                        method: t.method || t.Método,
+                        concept: t.concept || t.Concepto
+                    };
+                });
 
                 // Guardar en local
                 localStorage.setItem('transactions', JSON.stringify(App.state.transactions));
@@ -488,7 +507,18 @@ const App = {
                 // We will try standard fetch. If it fails, we notify.
 
                 // Construct payload
-                const payload = JSON.stringify(data);
+                // Construct payload
+                // Enviamos claves tanto en inglés como en español para asegurar compatibilidad
+                // con las cabeceras que tenga la hoja de cálculo.
+                const payload = JSON.stringify({
+                    ...data,
+                    Fecha: data.date,
+                    Tipo: data.type,
+                    Sector: data.sector,
+                    Importe: data.amount,
+                    Método: data.method,
+                    Concepto: data.concept
+                });
 
                 await fetch(App.state.settings.sheetUrl, {
                     method: 'POST',
