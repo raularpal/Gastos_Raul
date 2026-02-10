@@ -2,7 +2,7 @@ const App = {
     state: {
         transactions: [],
         settings: {
-            sheetUrl: localStorage.getItem('sheetUrl') || 'https://script.google.com/macros/s/AKfycbzRG3ULQ3mcaFwOPYjxmdc1I0sFvstI4zmaBkl73UxKXMXHsagPWgLzjKudMfk7ww_H/exec',
+            sheetUrl: localStorage.getItem('sheetUrl') || 'https://script.google.com/macros/s/AKfycbznDhrqrZRsXnc64Q4fvEx32-MBwCGi10v2t7SF3_TTRTA4-tBivaJXu-O8a32rL6xv/exec',
             userName: 'Usuario'
         }
     },
@@ -10,6 +10,10 @@ const App = {
     init: () => {
         App.loadData();
         App.navigate('add-transaction');
+
+        // Intentar cargar datos de Google Sheets
+        App.fetchFromSheet();
+
         // Initial setup
         document.querySelectorAll('.nav-links li').forEach(link => {
             link.addEventListener('click', (e) => {
@@ -26,7 +30,41 @@ const App = {
         }
     },
 
+    fetchFromSheet: async () => {
+        const url = App.state.settings.sheetUrl;
+        if (!url) return;
+
+        try {
+            console.log('Fetching data from sheet...');
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Error en la respuesta de red');
+
+            const data = await response.json();
+
+            if (Array.isArray(data)) {
+                // Normalizar datos
+                App.state.transactions = data.map(t => ({
+                    ...t,
+                    amount: parseFloat(t.amount),
+                    id: t.id || Date.now()
+                }));
+
+                // Guardar en local
+                localStorage.setItem('transactions', JSON.stringify(App.state.transactions));
+
+                // Refrescar vista actual si es necesario
+                if (App.state.currentPage === 'analytics') {
+                    App.renderAnalytics(document.getElementById('main-content'));
+                }
+                console.log('Datos sincronizados con Google Sheets');
+            }
+        } catch (error) {
+            console.error('No se pudieron cargar los datos del Sheet:', error);
+        }
+    },
+
     navigate: (page) => {
+        App.state.currentPage = page;
         const main = document.getElementById('main-content');
         main.innerHTML = ''; // Clear current content
         main.className = 'animate-fade-in';
