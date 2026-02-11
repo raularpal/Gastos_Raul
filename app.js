@@ -204,7 +204,7 @@ const App = {
                         type: 'doughnut',
                         plugins: [ChartDataLabels],
                         data: {
-                            labels: Object.keys(sectors),
+                            labels: Object.keys(sectors).map(sector => `${sector} - ${App.formatCurrency(sectors[sector])}`),
                             datasets: [{
                                 data: Object.values(sectors),
                                 backgroundColor: ['#6366f1', '#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b'],
@@ -227,7 +227,7 @@ const App = {
                                             sum += data;
                                         });
                                         let percentage = (value * 100 / sum).toFixed(1) + "%";
-                                        return App.formatCurrency(value) + '\n' + percentage;
+                                        return percentage;
                                     },
                                     anchor: 'end',
                                     align: 'start',
