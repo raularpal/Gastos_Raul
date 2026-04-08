@@ -2,7 +2,7 @@ const App = {
     state: {
         transactions: [],
         settings: {
-            sheetUrl: localStorage.getItem('sheetUrl') || 'https://script.google.com/macros/s/AKfycbznDhrqrZRsXnc64Q4fvEx32-MBwCGi10v2t7SF3_TTRTA4-tBivaJXu-O8a32rL6xv/exec',
+            sheetUrl: localStorage.getItem('sheetUrl') || 'https://script.google.com/macros/s/AKfycbwDzQtbRw9yl1oe9lsxxLGy4JlT-DGoBAV_8vKKLsnrbARHTNb3Nvg_INjSo2gQrEL2/exec',
             userName: 'Usuario'
         }
     },
@@ -35,11 +35,12 @@ const App = {
         if (!url) return;
 
         try {
-            console.log('Fetching data from sheet...');
-            const response = await fetch(url);
+            console.log('Fetching data from sheet:', url);
+            const response = await fetch(url + (url.includes('?') ? '&' : '?') + 't=' + Date.now());
             if (!response.ok) throw new Error('Error en la respuesta de red');
 
             const data = await response.json();
+            console.log('Data received:', data);
 
             if (Array.isArray(data)) {
                 // Normalizar datos
@@ -94,6 +95,7 @@ const App = {
                 break;
             case 'analytics':
                 App.renderAnalytics(main);
+                App.fetchFromSheet(); // Sincronizar al entrar
                 break;
         }
         lucide.createIcons();
@@ -116,19 +118,20 @@ const App = {
             endDate = offsetLast.toISOString().split('T')[0];
         }
 
-        // Filter Transactions by Date Range
-        const filteredTransactions = App.state.transactions.filter(t => {
-            return t.date >= startDate && t.date <= endDate;
-        });
+        // Filter and Sort Transactions by Date Range (Newest First)
+        const filteredTransactions = App.state.transactions
+            .filter(t => t.date >= startDate && t.date <= endDate)
+            .sort((a, b) => {
+                // Primary sort: Date
+                if (b.date !== a.date) return b.date.localeCompare(a.date);
+                // Secondary sort: ID (newer timestamp first)
+                return b.id - a.id;
+            });
 
         // Calculate Totals
-        const totalIncome = filteredTransactions
-            .filter(t => t.type === 'income')
-            .reduce((sum, t) => sum + t.amount, 0);
         const totalExpense = filteredTransactions
             .filter(t => t.type === 'expense')
             .reduce((sum, t) => sum + t.amount, 0);
-        const balance = totalIncome - totalExpense;
 
         // Label for range
         const formatDate = (dStr) => {
@@ -154,17 +157,9 @@ const App = {
                 </div>
             </div>
             
-            <div class="dashboard grid" style="margin-bottom: 3rem;">
+            <div class="dashboard grid" style="margin-bottom: 3rem; grid-template-columns: 1fr;">
                 <div class="card stat-card">
-                    <span class="stat-label">Balance</span>
-                    <span class="stat-value" style="color: ${balance >= 0 ? 'var(--success-color)' : 'var(--danger-color)'}">${App.formatCurrency(balance)}</span>
-                </div>
-                <div class="card stat-card">
-                    <span class="stat-label">Ingresos</span>
-                    <span class="stat-value" style="color: var(--success-color)">${App.formatCurrency(totalIncome)}</span>
-                </div>
-                <div class="card stat-card">
-                    <span class="stat-label">Gastos</span>
+                    <span class="stat-label">Total Gastos</span>
                     <span class="stat-value" style="color: var(--danger-color)">${App.formatCurrency(totalExpense)}</span>
                 </div>
             </div>
@@ -179,9 +174,9 @@ const App = {
             <div style="margin-top: 3rem;">
                 <h2 style="margin-bottom: 1.5rem;">Movimientos (${rangeLabel})</h2>
                 <div class="transactions-list">
-                    ${filteredTransactions.length > 0
-                ? filteredTransactions.map(t => App.renderTransactionItem(t)).join('')
-                : '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No hay movimientos en este periodo.</p>'}
+                    ${filteredTransactions.filter(t => t.type === 'expense').length > 0
+                ? filteredTransactions.filter(t => t.type === 'expense').map(t => App.renderTransactionItem(t)).join('')
+                : '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No hay gastos en este periodo.</p>'}
                 </div>
             </div>
         `;
@@ -296,23 +291,27 @@ const App = {
                         <span style="font-size: 0.8rem; color: var(--text-secondary);">${t.date} • ${t.method}</span>
                     </div>
                 </div>
-                <div style="text-align: right;">
-                    <span style="display: block; font-weight: 700; color: ${color};">${isExpense ? '-' : '+'}${App.formatCurrency(t.amount)}</span>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <div style="text-align: right;">
+                        <span style="display: block; font-weight: 700; color: ${color};">${isExpense ? '-' : '+'}${App.formatCurrency(t.amount)}</span>
+                    </div>
+                    <button onclick="App.deleteTransaction('${t.id}')" style="background: rgba(239, 68, 68, 0.1); color: var(--danger-color); border: none; padding: 0.5rem; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                        <i data-lucide="trash-2" style="width: 18px; height: 18px;"></i>
+                    </button>
                 </div>
             </div>
         `;
     },
 
     renderAddTransaction: (container) => {
-        // Multi-step wizard state
-        // Steps: 1. Sector/Type -> 2. Method -> 3. Concept & Date -> 4. Amount & Save
+        // Simple flow: 1. Sector -> 2. Amount & Save
         let step = 1;
         let data = {
-            type: 'expense', // Default
+            type: 'expense',
             sector: '',
-            concept: '',
+            concept: '-',
             amount: '',
-            method: 'card',
+            method: 'tarjeta',
             date: new Date().toISOString().split('T')[0]
         };
 
@@ -323,109 +322,56 @@ const App = {
             stepContainer.style.maxWidth = '600px';
             stepContainer.style.margin = '0 auto';
 
-            // Progress Header removed as requested
-
             if (step === 1) {
-                // Step 1: Sector / Assignment
-                const typeToggle = `
-                    <div style="display: flex; gap: 1rem; margin-bottom: 2rem; background: rgba(0,0,0,0.2); padding: 0.5rem; border-radius: 12px;">
-                        <button onclick="changeType('expense')" id="btn-expense" class="btn-primary" style="flex: 1; background: ${data.type === 'expense' ? 'var(--danger-color)' : 'transparent'}; opacity: ${data.type === 'expense' ? '1' : '0.5'}">Gasto</button>
-                        <button onclick="changeType('income')" id="btn-income" class="btn-primary" style="flex: 1; background: ${data.type === 'income' ? 'var(--success-color)' : 'transparent'}; opacity: ${data.type === 'income' ? '1' : '0.5'}">Ingreso</button>
-                    </div>
-                `;
+                // Step 1: Sector Selection
 
-                stepContainer.innerHTML += typeToggle;
-
-                if (data.type === 'expense') {
-                    const sectors = [
-                        'Comer fuera',
-                        'Supermercados',
-                        'Tomar algo',
-                        'Fiesta',
-                        'Transporte',
-                        'Compras',
-                        'Otros'
-                    ];
-
-                    const grid = document.createElement('div');
-                    grid.style.display = 'grid';
-                    grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(100px, 1fr))';
-                    grid.style.gap = '1rem';
-
-                    let sectorHtml = '';
-                    sectors.forEach(s => {
-                        const isFullWidth = s === 'Otros';
-                        sectorHtml += `
-                            <div onclick="selectSector('${s}')" style="
-                                background: rgba(255,255,255,0.05); 
-                                padding: 1.5rem; 
-                                border-radius: 16px; 
-                                text-align: center; 
-                                cursor: pointer; 
-                                border: 1px solid ${data.sector === s ? 'var(--accent-color)' : 'transparent'};
-                                transition: all 0.2s;
-                                ${isFullWidth ? 'grid-column: span 2;' : ''}">
-                                <i data-lucide="${App.getSectorIcon(s)}" style="margin-bottom: 0.5rem;"></i>
-                                <div style="font-size: 0.9rem;">${s}</div>
-                            </div>
-                        `;
-                    });
-                    stepContainer.innerHTML += `<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">${sectorHtml}</div>`;
-                }
-
-            } else if (step === 2) {
-                // Step 2: Method (Card, Cash, Bizum)
-                const methods = [
-                    { id: 'card', label: 'Tarjeta', icon: 'credit-card' },
-                    { id: 'cash', label: 'Efectivo', icon: 'banknote' },
-                    { id: 'bizum', label: 'Bizum', icon: 'smartphone' }
+                const sectors = [
+                    'Comer fuera',
+                    'Supermercados',
+                    'Tomar algo',
+                    'Fiesta',
+                    'Transporte',
+                    'Compras',
+                    'Otros'
                 ];
 
-                let methodHtml = '<div style="display: flex; flex-direction: column; gap: 1rem;">';
-                methods.forEach(m => {
-                    methodHtml += `
-                        <button onclick="selectMethod('${m.id}')" class="btn-primary" style="
-                            justify-content: flex-start; 
-                            background: ${data.method === m.id ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)'}; 
-                            border: 1px solid var(--glass-border);">
-                            <i data-lucide="${m.icon}"></i> ${m.label}
-                        </button>
+                const grid = document.createElement('div');
+                grid.style.display = 'grid';
+                grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                grid.style.gap = '1rem';
+
+                sectors.forEach(s => {
+                    const isFullWidth = s === 'Otros';
+                    const sectorCard = `
+                        <div onclick="selectSector('${s}')" style="
+                            background: rgba(255,255,255,0.05); 
+                            padding: 2rem 1rem; 
+                            border-radius: 20px; 
+                            text-align: center; 
+                            cursor: pointer; 
+                            border: 1px solid ${data.sector === s ? 'var(--accent-color)' : 'transparent'};
+                            transition: all 0.2s;
+                            ${isFullWidth ? 'grid-column: span 2;' : ''}">
+                            <i data-lucide="${App.getSectorIcon(s)}" style="width: 32px; height: 32px; margin-bottom: 1rem; color: white; opacity: 0.9;"></i>
+                            <div style="font-size: 1rem; font-weight: 500;">${s}</div>
+                        </div>
                     `;
+                    grid.innerHTML += sectorCard;
                 });
-                methodHtml += '</div>';
+                stepContainer.appendChild(grid);
 
-                stepContainer.innerHTML += methodHtml;
-                stepContainer.innerHTML += `
-                    <button onclick="prevStep()" style="background: transparent; border: none; color: var(--text-secondary); width: 100%; margin-top: 1rem; cursor: pointer;">Volver</button>
-                `;
-
-            } else if (step === 3) {
-                // Step 3: Concept (Optional/Required)
-                const isRequired = data.type === 'income';
+            } else if (step === 2) {
+                // Step 2: Amount
                 stepContainer.innerHTML += `
                     <div class="form-group">
-                        <label class="form-label">Concepto ${isRequired ? '(Obligatorio)' : '(Opcional)'}</label>
-                        <input type="text" id="input-concept" class="form-input" placeholder="${isRequired ? 'Ej: Nómina' : 'Ej: Cena con amigos'}" value="${data.concept}" autofocus>
-                    </div>
-                     <div class="form-group">
-                        <label class="form-label">Fecha</label>
-                        <input type="date" id="input-date" class="form-input" value="${data.date}">
-                    </div>
-
-                    <button onclick="nextStep()" class="btn-primary" style="margin-top: 2rem;">Siguiente <i data-lucide="arrow-right"></i></button>
-                    <button onclick="prevStep()" style="background: transparent; border: none; color: var(--text-secondary); width: 100%; margin-top: 1rem; cursor: pointer;">Volver</button>
-                `;
-
-            } else if (step === 4) {
-                // Step 4: Amount
-                stepContainer.innerHTML += `
-                    <div class="form-group">
-                        <label class="form-label">Importe (€)</label>
-                        <input type="number" id="input-amount" class="form-input" placeholder="0.00" value="${data.amount}" style="font-size: 2.5rem; font-weight: 700; text-align: center; height: 80px;" autofocus>
+                        <label class="form-label" style="text-align: center;">Importe para <strong>${data.sector}</strong> (€)</label>
+                        <input type="text" inputmode="decimal" id="input-amount" class="form-input" placeholder="0,00" value="${data.amount}" style="font-size: 2.5rem; font-weight: 700; text-align: center; height: 80px;" autofocus>
                     </div>
                     
-                    <button onclick="submitTransaction()" class="btn-primary" style="margin-top: 2rem; background: var(--success-color); height: 60px; font-size: 1.2rem;">GUARDAR <i data-lucide="check-circle"></i></button>
-                    <button onclick="prevStep()" style="background: transparent; border: none; color: var(--text-secondary); width: 100%; margin-top: 1rem; cursor: pointer;">Volver</button>
+                    <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+                        <button onclick="prevStep()" class="btn-primary" style="background: rgba(255,255,255,0.1); flex: 1;">VOLVER</button>
+                        <button onclick="submitTransaction()" class="btn-primary" style="background: var(--success-color); flex: 2; height: 60px; font-size: 1.2rem;">GUARDAR <i data-lucide="check-circle"></i></button>
+                    </div>
                 `;
             }
 
@@ -433,57 +379,13 @@ const App = {
             lucide.createIcons();
 
             // Bind global input handlers
-            window.selectSector = (s) => { data.sector = s; step++; renderStep(); };
-            window.selectMethod = (m) => { data.method = m; step++; renderStep(); };
-            window.changeType = (t) => {
-                data.type = t;
-                if (t === 'income') {
-                    data.sector = 'Ingreso';
-                    data.method = 'cash'; // Default method
-                    step = 3;
-                }
-                renderStep();
-            };
-            window.nextStep = () => {
-                const concept = document.getElementById('input-concept');
-                const dateInput = document.getElementById('input-date');
-
-                if (dateInput) data.date = dateInput.value;
-
-                // Validation
-                if (data.type === 'income') {
-                    if (concept && concept.value.trim() !== '') {
-                        data.concept = concept.value;
-                        step++;
-                        renderStep();
-                    } else {
-                        concept.style.borderColor = 'var(--danger-color)';
-                        concept.placeholder = '¡Concepto obligatorio!';
-                    }
-                } else {
-                    // For expense, optional
-                    if (concept) data.concept = concept.value;
-                    step++;
-                    renderStep();
-                }
-            };
-            window.prevStep = () => {
-                if (step === 3 && data.type === 'income') {
-                    step = 1;
-                    data.type = 'expense'; // Reset to default
-                } else {
-                    step--;
-                }
-                renderStep();
-            };
-
+            window.selectSector = (s) => { data.sector = s; step = 2; renderStep(); };
+            window.prevStep = () => { step = 1; renderStep(); };
             window.submitTransaction = () => {
-                const amount = document.getElementById('input-amount').value;
-                if (!amount) return;
-
-                data.amount = parseFloat(amount);
+                const amountStr = document.getElementById('input-amount').value;
+                if (!amountStr) return;
+                data.amount = parseFloat(amountStr.replace(',', '.'));
                 data.id = Date.now();
-
                 App.saveTransaction(data);
             };
         };
@@ -540,6 +442,34 @@ const App = {
 
         App.navigate('analytics');
     },
+    
+    deleteTransaction: async (id) => {
+        if (!confirm('¿Estás seguro de que quieres eliminar este movimiento?')) return;
+        
+        App.state.transactions = App.state.transactions.filter(t => String(t.id) !== String(id));
+        localStorage.setItem('transactions', JSON.stringify(App.state.transactions));
+        
+        // Sincronizar eliminación con Google Sheets
+        if (App.state.settings.sheetUrl) {
+            try {
+                await fetch(App.state.settings.sheetUrl, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'delete', id: id })
+                });
+            } catch (e) {
+                console.error('Error al eliminar en Google Sheets:', e);
+            }
+        }
+
+        // Refresh Current View
+        if (App.state.currentPage === 'analytics') {
+            App.navigate('analytics');
+        } else {
+            App.navigate(App.state.currentPage);
+        }
+    },
 
     // Utilities
     calculateTotal: (type) => {
@@ -561,6 +491,19 @@ const App = {
             'Transporte': 'bus',
             'Compras': 'shopping-bag',
             'Otros': 'circle-dashed',
+            'Coche': 'car',
+            'Gastos Fijos': 'home',
+            'Ahorro': 'piggy-bank',
+            'Caprichos': 'gift',
+            'Bares y Restaurantes': 'utensils',
+            'Supermercado': 'shopping-cart',
+            'Varios': 'more-horizontal',
+            'Bars / Restaurants': 'utensils',
+            'Supermercat': 'shopping-cart',
+            'Varis': 'more-horizontal',
+            'Cotxe': 'car',
+            'Estalvi': 'piggy-bank',
+            'Capritxos': 'gift',
             'Ingreso': 'wallet',
             'Salud': 'heart-pulse',
             'Casa': 'home'
